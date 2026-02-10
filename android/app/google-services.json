@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "546203993278",
+    "project_id": "healthbuddy-1fc61",
+    "storage_bucket": "healthbuddy-1fc61.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:546203993278:android:66c1c4a3fca77b917a4aef",
+        "android_client_info": {
+          "package_name": "com.healthbuddy.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQ_AYYGFSqfQbRWaKmKh6xOHsm835tOPA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
