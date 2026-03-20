@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'pdashboard.dart';
 import 'cdashboard.dart';
 import 'register_screen.dart';
+import 'services/notification_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -19,6 +20,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool isLoading = false;
 
   Future<void> loginUser() async {
+    debugPrint('loginUser called');
     setState(() {
       isLoading = true;
     });
@@ -31,40 +33,82 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       // Fetch role from Firestore
-      var userDoc = await FirebaseFirestore.instance
-          .collection("users")
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
           .doc(userCredential.user!.uid)
           .get();
 
-      String role = userDoc.data()?['role'] ?? "patient";
+      final rawRole = userDoc.data()?['role'];
+      final role =
+          (rawRole is String ? rawRole : rawRole?.toString() ?? 'patient')
+              .toLowerCase();
+      debugPrint('user role from firestore: $rawRole (normalized: $role)');
+
+      // Save FCM token to user document
+      String? fcmToken = await NotificationService.getFCMToken();
+      debugPrint('FCM token retrieved: $fcmToken');
+      if (fcmToken != null) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userCredential.user!.uid)
+              .set({'fcmToken': fcmToken}, SetOptions(merge: true));
+          debugPrint('FCM token saved: $fcmToken');
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('FCM token saved to Firestore')),
+          );
+        } catch (firestoreError) {
+          debugPrint('Failed to save FCM token: $firestoreError');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to save token: $firestoreError')),
+          );
+        }
+      } else {
+        debugPrint('FCM token is null');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('FCM token is null (check emulator or device)')),
+        );
+      }
 
       setState(() {
         isLoading = false;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Login Successful")),
+        const SnackBar(content: Text('Login Successful')),
       );
 
       // Navigate based on role
-      if (role == "patient") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const PatientDashboard()),
-        );
-      } else {
+      if (role == 'caregiver') {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const CaregiverDashboard()),
         );
+      } else {
+        // default to patient
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const PatientDashboard()),
+        );
       }
     } on FirebaseAuthException catch (e) {
+      debugPrint('FirebaseAuthException: ${e.code} ${e.message}');
       setState(() {
         isLoading = false;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? "Login failed")),
+        SnackBar(content: Text(e.message ?? 'Login failed')),
+      );
+    } catch (e, st) {
+      debugPrint('loginUser error: $e');
+      debugPrint('$st');
+      setState(() {
+        isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Login failed: $e')),
       );
     }
   }
