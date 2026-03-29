@@ -1,153 +1,101 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:convert';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:googleapis_auth/auth_io.dart' as auth;
-import 'package:googleapis/fcm/v1.dart' as fcm;
-import 'package:flutter/services.dart' show rootBundle;
 
 class NotificationService {
-  static const String _serviceAccountPath =
-      'healthbuddy-1fc61-firebase-adminsdk-fbsvc-acdc2b196c.json';
-
   static final FlutterLocalNotificationsPlugin
       _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
-  static Future<void> sendEmergencyNotification(
-      List<String> tokens, String title, String body) async {
-    print('Sending emergency notification to tokens: $tokens');
-
-    final jsonString = await rootBundle.loadString(_serviceAccountPath);
-    final json = jsonDecode(jsonString);
-    final credentials = auth.ServiceAccountCredentials.fromJson(json);
-    final client = await auth.clientViaServiceAccount(
-        credentials, ['https://www.googleapis.com/auth/firebase.messaging']);
-    final fcmApi = fcm.FirebaseCloudMessagingApi(client);
-    final projectId = json['project_id'];
-
-    for (final token in tokens) {
-      final message = fcm.Message(
-        token: token,
-        notification: fcm.Notification(
-          title: title,
-          body: body,
-        ),
-        data: {
-          'click_action': 'FLUTTER_NOTIFICATION_CLICK',
-          'emergency_id': '12345',
-        },
-      );
-
-      try {
-        final response = await fcmApi.projects.messages.send(
-            fcm.SendMessageRequest(message: message), 'projects/$projectId');
-        print('Notification sent to $token: ${response.toJson()}');
-      } catch (e) {
-        print('Failed to send notification to $token: $e');
-      }
-    }
-
-    client.close();
-  }
-
+  // ✅ INIT FUNCTION
   static Future<void> init() async {
     FirebaseMessaging messaging = FirebaseMessaging.instance;
 
-    // Request permission for iOS
+    // 🔔 Request permission
     NotificationSettings settings = await messaging.requestPermission(
       alert: true,
-      announcement: false,
       badge: true,
-      carPlay: false,
-      criticalAlert: false,
-      provisional: false,
       sound: true,
     );
 
-    print('User granted permission: ${settings.authorizationStatus}');
+    print('Permission: ${settings.authorizationStatus}');
 
-    // Get the FCM token
+    // 🔑 Get token
     String? token = await messaging.getToken();
     print('FCM Token: $token');
 
-    // Save token to Firestore (if logged in)
+    // 💾 Save token
     await _saveTokenToFirestore(token);
 
-    // Listen for token refresh and save that too
+    // 🔄 Token refresh
     FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-      print('FCM token refreshed: $newToken');
+      print('Token refreshed: $newToken');
       await _saveTokenToFirestore(newToken);
     });
 
-    // Initialize local notifications
-    const AndroidInitializationSettings initializationSettingsAndroid =
+    // 📱 Local notification init
+    const AndroidInitializationSettings androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    const InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
+    const InitializationSettings initSettings =
+        InitializationSettings(android: androidSettings);
 
-    await _flutterLocalNotificationsPlugin.initialize(initializationSettings);
+    await _flutterLocalNotificationsPlugin.initialize(initSettings);
 
-    // Handle foreground messages
+    // 📩 Foreground messages
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print('Got a message whilst in the foreground!');
-      print('Message data: ${message.data}');
-
       if (message.notification != null) {
-        print('Message also contained a notification: ${message.notification}');
         _showNotification(message.notification!);
       }
     });
 
-    // Handle background messages
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    // 📩 Background handler
+    FirebaseMessaging.onBackgroundMessage(_backgroundHandler);
   }
 
+  // 💾 Save token to Firestore
   static Future<void> _saveTokenToFirestore(String? token) async {
     if (token == null) return;
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .set({'fcmToken': token}, SetOptions(merge: true));
-      print('Saved FCM token to Firestore for user ${user.uid}');
-    } catch (e) {
-      print('Failed to save FCM token to Firestore: $e');
-    }
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .set({'fcmToken': token}, SetOptions(merge: true));
+
+    print('Token saved for user ${user.uid}');
   }
 
-  static Future<void> _firebaseMessagingBackgroundHandler(
-      RemoteMessage message) async {
-    print('Handling a background message: ${message.messageId}');
+  // 📩 Background handler
+  static Future<void> _backgroundHandler(RemoteMessage message) async {
+    print('Background message: ${message.messageId}');
   }
 
+  // 🔔 Show local notification
   static Future<void> _showNotification(RemoteNotification notification) async {
-    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+    const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
       'emergency_channel',
-      'Emergency Notifications',
-      channelDescription: 'Channel for emergency alerts',
+      'Emergency Alerts',
       importance: Importance.max,
       priority: Priority.high,
-      showWhen: false,
     );
 
-    const NotificationDetails platformChannelSpecifics =
-        NotificationDetails(android: androidPlatformChannelSpecifics);
+    const NotificationDetails platformDetails =
+        NotificationDetails(android: androidDetails);
 
     await _flutterLocalNotificationsPlugin.show(
       0,
       notification.title,
       notification.body,
-      platformChannelSpecifics,
+      platformDetails,
     );
   }
 
+  // ✅ Get token (used in login)
   static Future<String?> getFCMToken() async {
-    FirebaseMessaging messaging = FirebaseMessaging.instance;
-    return await messaging.getToken();
+    return await FirebaseMessaging.instance.getToken();
   }
 }

@@ -20,10 +20,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool isLoading = false;
 
   Future<void> loginUser() async {
-    debugPrint('loginUser called');
-    setState(() {
-      isLoading = true;
-    });
+    setState(() => isLoading = true);
 
     try {
       UserCredential userCredential =
@@ -32,7 +29,6 @@ class _LoginScreenState extends State<LoginScreen> {
         password: passwordController.text.trim(),
       );
 
-      // Fetch role from Firestore
       final userDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc(userCredential.user!.uid)
@@ -42,73 +38,34 @@ class _LoginScreenState extends State<LoginScreen> {
       final role =
           (rawRole is String ? rawRole : rawRole?.toString() ?? 'patient')
               .toLowerCase();
-      debugPrint('user role from firestore: $rawRole (normalized: $role)');
 
-      // Save FCM token to user document
       String? fcmToken = await NotificationService.getFCMToken();
-      debugPrint('FCM token retrieved: $fcmToken');
+
       if (fcmToken != null) {
-        try {
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(userCredential.user!.uid)
-              .set({'fcmToken': fcmToken}, SetOptions(merge: true));
-          debugPrint('FCM token saved: $fcmToken');
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('FCM token saved to Firestore')),
-          );
-        } catch (firestoreError) {
-          debugPrint('Failed to save FCM token: $firestoreError');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to save token: $firestoreError')),
-          );
-        }
-      } else {
-        debugPrint('FCM token is null');
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('FCM token is null (check emulator or device)')),
-        );
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userCredential.user!.uid)
+            .set({'fcmToken': fcmToken}, SetOptions(merge: true));
       }
 
-      setState(() {
-        isLoading = false;
-      });
+      setState(() => isLoading = false);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login Successful')),
-      );
-
-      // Navigate based on role
       if (role == 'caregiver') {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const CaregiverDashboard()),
         );
       } else {
-        // default to patient
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const PatientDashboard()),
         );
       }
-    } on FirebaseAuthException catch (e) {
-      debugPrint('FirebaseAuthException: ${e.code} ${e.message}');
-      setState(() {
-        isLoading = false;
-      });
+    } catch (e) {
+      setState(() => isLoading = false);
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Login failed')),
-      );
-    } catch (e, st) {
-      debugPrint('loginUser error: $e');
-      debugPrint('$st');
-      setState(() {
-        isLoading = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Login failed: $e')),
+        SnackBar(content: Text("Login failed: $e")),
       );
     }
   }
@@ -116,46 +73,84 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("HealthBuddy Login")),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            TextField(
-              controller: emailController,
-              decoration: const InputDecoration(
-                labelText: "Email",
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 15),
-            TextField(
-              controller: passwordController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: "Password",
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 20),
-            isLoading
-                ? const CircularProgressIndicator()
-                : ElevatedButton(
-                    onPressed: loginUser,
-                    child: const Text("Login"),
+      body: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFFFF6B6B), Color(0xFFFF8E8E)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                const Text(
+                  "HealthBuddy",
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
                   ),
-            const SizedBox(height: 10),
-            TextButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => RegisterScreen()),
-                );
-              },
-              child: const Text("Don't have an account? Register"),
-            )
-          ],
+                ),
+                const SizedBox(height: 40),
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Column(
+                    children: [
+                      TextField(
+                        controller: emailController,
+                        decoration: const InputDecoration(
+                          labelText: "Email",
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 15),
+                      TextField(
+                        controller: passwordController,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: "Password",
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 25),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: isLoading ? null : loginUser,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                          ),
+                          child: isLoading
+                              ? const CircularProgressIndicator(
+                                  color: Colors.white)
+                              : const Text("Login"),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => RegisterScreen()),
+                          );
+                        },
+                        child: const Text(
+                          "Don't have an account? Register",
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

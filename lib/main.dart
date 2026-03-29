@@ -6,19 +6,31 @@ import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ✅ Firebase init
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // ✅ FCM / Notification init
   await NotificationService.init();
-  runApp(MyApp());
+
+  // ✅ Run app (ONLY ONCE)
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: LoginScreen(),
+      title: 'HealthBuddy',
+      theme: ThemeData(
+        primarySwatch: Colors.red,
+      ),
+      home: const LoginScreen(),
     );
   }
 }
