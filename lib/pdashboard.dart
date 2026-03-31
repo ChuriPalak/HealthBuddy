@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:fl_chart/fl_chart.dart';
-import 'widgets/health_card.dart';
+import 'dart:math';
+import 'package:geolocator/geolocator.dart';
 
 class PatientDashboard extends StatefulWidget {
   const PatientDashboard({super.key});
@@ -11,192 +11,132 @@ class PatientDashboard extends StatefulWidget {
 }
 
 class _PatientDashboardState extends State<PatientDashboard> {
-  int heartRate = 0;
-  int spo2 = 0;
+  final int windowSize = 100;
 
-  List<FlSpot> hrSpots = [];
-  List<FlSpot> spo2Spots = [];
-
-  int maxHR = 0, minHR = 999;
-  int maxSpO2 = 0, minSpO2 = 999;
-
-  List<Map<String, dynamic>> historyData = [];
+  double mean = 0;
+  double stdDev = 0;
+  double upper = 0;
+  double lower = 0;
+  double trend = 0;
 
   bool isLoading = false;
 
-  @override
-  void initState() {
-    super.initState();
-    fetchData();
+  int heartRate = 0;
+  int spo2 = 0;
+
+  // 🔥 Intelligent model
+  void calculateModel(List<QueryDocumentSnapshot> docs) {
+    int startIndex = docs.length > windowSize ? docs.length - windowSize : 0;
+
+    List<int> hr = [];
+
+    for (int i = startIndex; i < docs.length; i++) {
+      hr.add(docs[i]['heartRate']);
+    }
+
+    mean = hr.reduce((a, b) => a + b) / hr.length;
+
+    double variance =
+        hr.map((e) => pow(e - mean, 2)).reduce((a, b) => a + b) / hr.length;
+
+    stdDev = sqrt(variance);
+
+    upper = mean + 2 * stdDev;
+    lower = mean - 2 * stdDev;
+
+    if (hr.length >= 5) {
+      trend = (hr.last - hr[hr.length - 5]).toDouble();
+    }
   }
 
-  void fetchData() {
-    FirebaseFirestore.instance
-        .collection("sensorData")
-        .orderBy("timestamp", descending: true)
-        .snapshots()
-        .listen((snapshot) {
-      List<FlSpot> tempHR = [];
-      List<FlSpot> tempSpO2 = [];
+  void checkAnomaly(int latestHR) {
+    bool abnormal = latestHR > upper || latestHR < lower || trend > 15;
 
-      int tMaxHR = 0, tMinHR = 999;
-      int tMaxSpO2 = 0, tMinSpO2 = 999;
-
-      List<Map<String, dynamic>> tempHistory = [];
-
-      DateTime now = DateTime.now();
-
-      for (var doc in snapshot.docs) {
-        var data = doc.data() as Map<String, dynamic>;
-
-        if (data['timestamp'] == null) continue;
-
-        DateTime time = (data['timestamp'] as Timestamp).toDate();
-
-        int hr = data['heartRate'];
-        int sp = data['spo2'];
-
-        // 📊 24 hour graph
-        if (now.difference(time).inHours <= 24) {
-          double x = time.hour + (time.minute / 60);
-
-          tempHR.add(FlSpot(x, hr.toDouble()));
-          tempSpO2.add(FlSpot(x, sp.toDouble()));
-        }
-
-        // 📜 History
-        tempHistory.add({
-          "hr": hr,
-          "spo2": sp,
-          "time": time,
-        });
-
-        // 📉 Min/Max
-        tMaxHR = hr > tMaxHR ? hr : tMaxHR;
-        tMinHR = hr < tMinHR ? hr : tMinHR;
-
-        tMaxSpO2 = sp > tMaxSpO2 ? sp : tMaxSpO2;
-        tMinSpO2 = sp < tMinSpO2 ? sp : tMinSpO2;
-      }
-
-      if (snapshot.docs.isNotEmpty) {
-        var latest = snapshot.docs.first;
-
-        setState(() {
-          heartRate = latest['heartRate'];
-          spo2 = latest['spo2'];
-
-          hrSpots = tempHR;
-          spo2Spots = tempSpO2;
-
-          maxHR = tMaxHR;
-          minHR = tMinHR;
-          maxSpO2 = tMaxSpO2;
-          minSpO2 = tMinSpO2;
-
-          historyData = tempHistory;
-        });
-      }
-    });
+    if (abnormal) {
+      sendSOS();
+    }
   }
 
+  // 🚨 SOS WITH LOCATION
   Future<void> sendSOS() async {
     setState(() => isLoading = true);
 
+    LocationPermission permission = await Geolocator.requestPermission();
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return;
+    }
+
+    Position position = await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+
     await FirebaseFirestore.instance.collection('emergencies').add({
-      'message': '🚨 Patient triggered emergency!',
+      'heartRate': heartRate,
+      'spo2': spo2,
+      'latitude': position.latitude,
+      'longitude': position.longitude,
       'timestamp': FieldValue.serverTimestamp(),
     });
 
     setState(() => isLoading = false);
 
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text("SOS Sent")));
-  }
-
-  LineChartData chartData() {
-    return LineChartData(
-      minX: 0,
-      maxX: 24,
-      titlesData: FlTitlesData(
-        bottomTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            interval: 4,
-            getTitlesWidget: (value, meta) {
-              return Text("${value.toInt()}h");
-            },
-          ),
-        ),
-      ),
-      lineBarsData: [
-        LineChartBarData(spots: hrSpots, isCurved: true),
-        LineChartBarData(spots: spo2Spots, isCurved: true),
-      ],
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("🚨 Emergency Triggered")),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Patient Dashboard')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            HealthCard(
-                title: "Heart Rate",
-                value: "$heartRate BPM",
-                icon: Icons.favorite,
-                color: Colors.red),
-            const SizedBox(height: 10),
-            HealthCard(
-                title: "SpO2",
-                value: "$spo2 %",
-                icon: Icons.air,
-                color: Colors.blue),
-            const SizedBox(height: 20),
-            const Text("24 Hour Graph",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            SizedBox(height: 250, child: LineChart(chartData())),
-            const SizedBox(height: 20),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  children: [
-                    Text("Max HR: $maxHR | Min HR: $minHR"),
-                    Text("Max SpO2: $maxSpO2 | Min SpO2: $minSpO2"),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text("History"),
-            ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: historyData.length > 10 ? 10 : historyData.length,
-              itemBuilder: (context, index) {
-                var item = historyData[index];
+      appBar: AppBar(title: const Text("Smart Health Dashboard")),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection("sensorData")
+            .orderBy("timestamp", descending: false)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-                return ListTile(
-                  leading: const Icon(Icons.history),
-                  title: Text("HR: ${item['hr']} | SpO2: ${item['spo2']}"),
-                  subtitle: Text(item['time'].toString()),
-                );
-              },
+          var docs = snapshot.data!.docs;
+
+          if (docs.isEmpty) {
+            return const Center(child: Text("No data"));
+          }
+
+          calculateModel(docs);
+
+          heartRate = docs.last['heartRate'];
+          spo2 = docs.last['spo2'];
+
+          checkAnomaly(heartRate);
+
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                Text("❤️ HR: $heartRate", style: const TextStyle(fontSize: 24)),
+                Text("🩸 SpO2: $spo2", style: const TextStyle(fontSize: 24)),
+                const SizedBox(height: 20),
+                Text("Mean: ${mean.toStringAsFixed(2)}"),
+                Text("StdDev: ${stdDev.toStringAsFixed(2)}"),
+                Text("Upper: ${upper.toStringAsFixed(2)}"),
+                Text("Lower: ${lower.toStringAsFixed(2)}"),
+                Text("Trend: ${trend.toStringAsFixed(2)}"),
+                const SizedBox(height: 20),
+                isLoading
+                    ? const CircularProgressIndicator()
+                    : ElevatedButton(
+                        onPressed: sendSOS,
+                        child: const Text("🚨 Emergency SOS"),
+                      ),
+              ],
             ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: isLoading ? null : sendSOS,
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              child: isLoading
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text("SOS"),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

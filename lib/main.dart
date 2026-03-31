@@ -3,19 +3,22 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'login_screen.dart';
 import 'services/notification_service.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✅ Firebase init
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // ✅ FCM / Notification init
   await NotificationService.init();
 
-  // ✅ Run app (ONLY ONCE)
+  // 🔔 Foreground notifications
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    print("🔔 Notification received: ${message.notification?.title}");
+  });
+
   runApp(const MyApp());
 }
 
@@ -27,9 +30,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'HealthBuddy',
-      theme: ThemeData(
-        primarySwatch: Colors.red,
-      ),
+      theme: ThemeData(primarySwatch: Colors.red),
       home: const LoginScreen(),
     );
   }

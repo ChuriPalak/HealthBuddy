@@ -44,13 +44,14 @@ dependencies:
   googleapis: ^11.0.0
   googleapis_auth: ^1.4.1
   fl_chart: ^0.68.0
+  geolocator: ^10.1.1
+ 
+
    
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-  firebase_auth: ^4.17.4
-  cloud_firestore: ^4.15.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -90,5 +91,7 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
-firebase_auth: ^4.17.4
-cloud_firestore: ^4.15.4
+
+dependency_overrides:
+  geolocator_android: ^5.0.2
+  geolocator_platform_interface: ^4.2.0
