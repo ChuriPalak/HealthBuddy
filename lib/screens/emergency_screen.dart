@@ -5,7 +5,7 @@ class EmergencyScreen extends StatelessWidget {
   const EmergencyScreen({super.key});
 
   void sendSOS() {
-    NotificationService().sendEmergencyNotification();
+    NotificationService.sendEmergencyNotification();
   }
 
   @override

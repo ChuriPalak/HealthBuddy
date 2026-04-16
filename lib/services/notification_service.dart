@@ -2,6 +2,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin
@@ -40,12 +41,15 @@ class NotificationService {
     const InitializationSettings initSettings =
         InitializationSettings(android: androidSettings);
 
-    await _flutterLocalNotificationsPlugin.initialize(initSettings);
+    await _flutterLocalNotificationsPlugin.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: _onDidReceiveNotificationResponse,
+    );
 
     // 📩 Foreground messages
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (message.notification != null) {
-        _showNotification(message.notification!);
+        _showNotification(message.notification!, message.data);
       }
     });
 
@@ -74,7 +78,8 @@ class NotificationService {
   }
 
   // 🔔 Show local notification
-  static Future<void> _showNotification(RemoteNotification notification) async {
+  static Future<void> _showNotification(
+      RemoteNotification notification, Map<String, dynamic> data) async {
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
       'emergency_channel',
@@ -83,14 +88,60 @@ class NotificationService {
       priority: Priority.high,
     );
 
-    const NotificationDetails platformDetails =
+    final NotificationDetails platformDetails =
         NotificationDetails(android: androidDetails);
+
+    String payload = '';
+    if (data.containsKey('lat') && data.containsKey('lng')) {
+      payload = 'maps:${data['lat']},${data['lng']}';
+    }
 
     await _flutterLocalNotificationsPlugin.show(
       0,
       notification.title,
       notification.body,
       platformDetails,
+      payload: payload,
+    );
+  }
+
+  // 📍 Handle notification tap
+  static void _onDidReceiveNotificationResponse(NotificationResponse response) {
+    final payload = response.payload;
+    if (payload != null && payload.startsWith('maps:')) {
+      final coords = payload.substring(5).split(',');
+      if (coords.length == 2) {
+        final lat = double.tryParse(coords[0]);
+        final lng = double.tryParse(coords[1]);
+        if (lat != null && lng != null) {
+          final url =
+              'https://www.google.com/maps/search/?api=1&query=$lat,$lng';
+          launch(url);
+        }
+      }
+    }
+  }
+
+  // ✅ Emergency send helper (used by EmergencyScreen)
+  static Future<void> sendEmergencyNotification() async {
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      'emergency_channel',
+      'Emergency Alerts',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+    );
+
+    const NotificationDetails platformDetails =
+        NotificationDetails(android: androidDetails);
+
+    await _flutterLocalNotificationsPlugin.show(
+      1,
+      'SOS Alert',
+      'Emergency SOS has been triggered.',
+      platformDetails,
+      payload: 'sos',
     );
   }
 

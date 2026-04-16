@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:math';
-import 'package:geolocator/geolocator.dart';
+import 'package:location/location.dart';
+import 'widgets/health_history_widget.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class PatientDashboard extends StatefulWidget {
   const PatientDashboard({super.key});
@@ -23,6 +25,8 @@ class _PatientDashboardState extends State<PatientDashboard> {
 
   int heartRate = 0;
   int spo2 = 0;
+
+  final Location location = Location(); // ✅ location instance
 
   // 🔥 Intelligent model
   void calculateModel(List<QueryDocumentSnapshot> docs) {
@@ -57,40 +61,59 @@ class _PatientDashboardState extends State<PatientDashboard> {
     }
   }
 
-  // 🚨 SOS WITH LOCATION
+  // 🚨 SOS WITH LOCATION (UPDATED)
   Future<void> sendSOS() async {
     setState(() => isLoading = true);
 
-    LocationPermission permission = await Geolocator.requestPermission();
+    try {
+      // 🔐 Check permission
+      PermissionStatus permission = await location.requestPermission();
 
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      return;
+      if (permission != PermissionStatus.granted) {
+        setState(() => isLoading = false);
+        return;
+      }
+
+      // 📍 Get location
+      LocationData currentLocation = await location.getLocation();
+
+      double? lat = currentLocation.latitude;
+      double? lng = currentLocation.longitude;
+
+      if (lat == null || lng == null) {
+        setState(() => isLoading = false);
+        return;
+      }
+
+      // 🔥 Send to Firestore
+      await FirebaseFirestore.instance.collection('emergencies').add({
+        'heartRate': heartRate,
+        'spo2': spo2,
+        'latitude': lat,
+        'longitude': lng,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      print("Error: $e");
     }
 
-    Position position = await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.high,
-    );
-
-    await FirebaseFirestore.instance.collection('emergencies').add({
-      'heartRate': heartRate,
-      'spo2': spo2,
-      'latitude': position.latitude,
-      'longitude': position.longitude,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
-
     setState(() => isLoading = false);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("🚨 Emergency Triggered")),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Smart Health Dashboard")),
+      appBar: AppBar(
+        title: const Text("Smart Health Dashboard"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+            },
+          ),
+        ],
+      ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
             .collection("sensorData")
@@ -114,29 +137,22 @@ class _PatientDashboardState extends State<PatientDashboard> {
 
           checkAnomaly(heartRate);
 
-          return Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              children: [
-                Text("❤️ HR: $heartRate", style: const TextStyle(fontSize: 24)),
-                Text("🩸 SpO2: $spo2", style: const TextStyle(fontSize: 24)),
-                const SizedBox(height: 20),
-                Text("Mean: ${mean.toStringAsFixed(2)}"),
-                Text("StdDev: ${stdDev.toStringAsFixed(2)}"),
-                Text("Upper: ${upper.toStringAsFixed(2)}"),
-                Text("Lower: ${lower.toStringAsFixed(2)}"),
-                Text("Trend: ${trend.toStringAsFixed(2)}"),
-                const SizedBox(height: 20),
-                isLoading
-                    ? const CircularProgressIndicator()
-                    : ElevatedButton(
-                        onPressed: sendSOS,
-                        child: const Text("🚨 Emergency SOS"),
-                      ),
-              ],
-            ),
+          return HealthHistoryWidget(
+            currentHeartRate: heartRate,
+            currentSpO2: spo2,
+            mean: mean,
+            stdDev: stdDev,
+            upper: upper,
+            lower: lower,
+            trend: trend,
           );
         },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: sendSOS,
+        backgroundColor: Colors.red,
+        child: const Icon(Icons.sos, color: Colors.white),
+        tooltip: 'Emergency SOS',
       ),
     );
   }
