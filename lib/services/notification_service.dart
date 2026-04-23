@@ -4,60 +4,77 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+Future<void> openMap(double lat, double lng) async {
+  final Uri googleMapsUrl = Uri.parse(
+    'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+  );
+
+  if (await canLaunchUrl(googleMapsUrl)) {
+    await launchUrl(
+      googleMapsUrl,
+      mode: LaunchMode.externalApplication,
+    );
+  } else {
+    throw 'Could not open maps';
+  }
+}
+
 class NotificationService {
   static final FlutterLocalNotificationsPlugin
       _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
-  // ✅ INIT FUNCTION
+  // 🔥 BACKGROUND HANDLER (IMPORTANT)
+  @pragma('vm:entry-point')
+  static Future<void> backgroundHandler(RemoteMessage message) async {
+    print("🔴 Background message: ${message.messageId}");
+  }
+
+  // ✅ INIT
   static Future<void> init() async {
     FirebaseMessaging messaging = FirebaseMessaging.instance;
 
-    // 🔔 Request permission
-    NotificationSettings settings = await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    // 🔔 Permission
+    await messaging.requestPermission();
 
-    print('Permission: ${settings.authorizationStatus}');
-
-    // 🔑 Get token
+    // 🔑 Token
     String? token = await messaging.getToken();
-    print('FCM Token: $token');
+    print("FCM Token: $token");
 
-    // 💾 Save token
     await _saveTokenToFirestore(token);
 
-    // 🔄 Token refresh
-    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-      print('Token refreshed: $newToken');
-      await _saveTokenToFirestore(newToken);
-    });
+    FirebaseMessaging.instance.onTokenRefresh.listen(_saveTokenToFirestore);
 
     // 📱 Local notification init
     const AndroidInitializationSettings androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    const InitializationSettings initSettings =
-        InitializationSettings(android: androidSettings);
-
     await _flutterLocalNotificationsPlugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: _onDidReceiveNotificationResponse,
+      const InitializationSettings(android: androidSettings),
+      onDidReceiveNotificationResponse: _onTap,
     );
 
-    // 📩 Foreground messages
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    // ✅ FOREGROUND
+    FirebaseMessaging.onMessage.listen((message) {
       if (message.notification != null) {
-        _showNotification(message.notification!, message.data);
+        _showNotification(message);
       }
     });
 
-    // 📩 Background handler
-    FirebaseMessaging.onBackgroundMessage(_backgroundHandler);
+    // ✅ CLICK WHEN APP IN BACKGROUND
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      _handleMessage(message);
+    });
+
+    // ✅ CLICK WHEN APP TERMINATED
+    RemoteMessage? initialMessage =
+        await FirebaseMessaging.instance.getInitialMessage();
+
+    if (initialMessage != null) {
+      _handleMessage(initialMessage);
+    }
   }
 
-  // 💾 Save token to Firestore
+  // 💾 Save token
   static Future<void> _saveTokenToFirestore(String? token) async {
     if (token == null) return;
 
@@ -68,55 +85,60 @@ class NotificationService {
         .collection('users')
         .doc(user.uid)
         .set({'fcmToken': token}, SetOptions(merge: true));
-
-    print('Token saved for user ${user.uid}');
   }
 
-  // 📩 Background handler
-  static Future<void> _backgroundHandler(RemoteMessage message) async {
-    print('Background message: ${message.messageId}');
-  }
-
-  // 🔔 Show local notification
-  static Future<void> _showNotification(
-      RemoteNotification notification, Map<String, dynamic> data) async {
-    const AndroidNotificationDetails androidDetails =
-        AndroidNotificationDetails(
+  // 🔔 SHOW NOTIFICATION
+  static Future<void> _showNotification(RemoteMessage message) async {
+    const androidDetails = AndroidNotificationDetails(
       'emergency_channel',
       'Emergency Alerts',
       importance: Importance.max,
       priority: Priority.high,
+      playSound: true,
     );
 
-    final NotificationDetails platformDetails =
-        NotificationDetails(android: androidDetails);
+    final details = NotificationDetails(android: androidDetails);
 
     String payload = '';
-    if (data.containsKey('lat') && data.containsKey('lng')) {
-      payload = 'maps:${data['lat']},${data['lng']}';
+
+    if (message.data.containsKey('lat')) {
+      payload = 'maps:${message.data['lat']},${message.data['lng']}';
     }
 
     await _flutterLocalNotificationsPlugin.show(
       0,
-      notification.title,
-      notification.body,
-      platformDetails,
+      message.notification?.title,
+      message.notification?.body,
+      details,
       payload: payload,
     );
   }
 
-  // 📍 Handle notification tap
-  static void _onDidReceiveNotificationResponse(NotificationResponse response) {
-    final payload = response.payload;
-    if (payload != null && payload.startsWith('maps:')) {
+  // 📍 HANDLE TAP
+  static void _onTap(NotificationResponse response) {
+    if (response.payload != null) {
+      _handlePayload(response.payload!);
+    }
+  }
+
+  static void _handleMessage(RemoteMessage message) {
+    if (message.data.containsKey('lat')) {
+      final lat = double.tryParse(message.data['lat']);
+      final lng = double.tryParse(message.data['lng']);
+      if (lat != null && lng != null) {
+        openMap(lat, lng);
+      }
+    }
+  }
+
+  static void _handlePayload(String payload) {
+    if (payload.startsWith('maps:')) {
       final coords = payload.substring(5).split(',');
       if (coords.length == 2) {
         final lat = double.tryParse(coords[0]);
         final lng = double.tryParse(coords[1]);
         if (lat != null && lng != null) {
-          final url =
-              'https://www.google.com/maps/search/?api=1&query=$lat,$lng';
-          launch(url);
+          openMap(lat, lng);
         }
       }
     }

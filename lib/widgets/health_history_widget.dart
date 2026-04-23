@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
@@ -74,6 +75,66 @@ class HealthHistoryWidget extends StatefulWidget {
 
 class _HealthHistoryWidgetState extends State<HealthHistoryWidget> {
   HealthPeriod _selectedPeriod = HealthPeriod.last24h;
+  List<DailyStats> _dailyStats = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistoryData();
+  }
+
+  void _loadHistoryData() async {
+    setState(() => _isLoading = true);
+
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('sensorData')
+          .orderBy('timestamp', descending: false)
+          .get();
+
+      final docs = snapshot.docs;
+      final statsMap = <String, List<Map<String, int>>>{};
+
+      for (final doc in docs) {
+        final ts = doc['timestamp'];
+        if (ts is! Timestamp) continue;
+        final date = ts.toDate();
+        final key =
+            '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+        statsMap.putIfAbsent(key, () => []).add({
+          'heartRate': (doc['heartRate'] as num).toInt(),
+          'spo2': (doc['spo2'] as num).toInt(),
+        });
+      }
+
+      final dailyStats = statsMap.entries.map((entry) {
+        final hrValues = entry.value.map((m) => m['heartRate']!).toList();
+        final spo2Values = entry.value.map((m) => m['spo2']!).toList();
+        final hrSum = hrValues.reduce((a, b) => a + b);
+        final spo2Sum = spo2Values.reduce((a, b) => a + b);
+
+        return DailyStats(
+          date: entry.key,
+          hrAvg: hrSum / hrValues.length,
+          hrMin: hrValues.reduce((a, b) => a < b ? a : b),
+          hrMax: hrValues.reduce((a, b) => a > b ? a : b),
+          spo2Avg: spo2Sum / spo2Values.length,
+          spo2Min: spo2Values.reduce((a, b) => a < b ? a : b),
+          spo2Max: spo2Values.reduce((a, b) => a > b ? a : b),
+        );
+      }).toList()
+        ..sort((a, b) => b.date.compareTo(a.date));
+
+      setState(() {
+        _dailyStats = dailyStats;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      print('Error loading history data: $e');
+    }
+  }
 
   void _showPeriodSelector() {
     showModalBottomSheet(
@@ -116,9 +177,6 @@ class _HealthHistoryWidgetState extends State<HealthHistoryWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final startTime = now.subtract(_selectedPeriod.duration);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -140,211 +198,343 @@ class _HealthHistoryWidgetState extends State<HealthHistoryWidget> {
         ),
         const SizedBox(height: 10),
         Expanded(
-          child: StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('sensorData')
-                .where('timestamp',
-                    isGreaterThanOrEqualTo: Timestamp.fromDate(startTime))
-                .orderBy('timestamp', descending: false)
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _dailyStats.isEmpty
+                  ? const Center(child: Text('No data available.'))
+                  : Column(
+                      children: [
+                        // Graph Section
+                        StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance
+                              .collection('sensorData')
+                              .where('timestamp',
+                                  isGreaterThanOrEqualTo: Timestamp.fromDate(
+                                      DateTime.now()
+                                          .subtract(_selectedPeriod.duration)))
+                              .orderBy('timestamp', descending: false)
+                              .snapshots(),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState ==
+                                ConnectionState.waiting) {
+                              return const SizedBox(
+                                height: 240,
+                                child:
+                                    Center(child: CircularProgressIndicator()),
+                              );
+                            }
 
-              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                return const Center(
-                    child: Text('No data available for this period.'));
-              }
-
-              final docs = snapshot.data!.docs;
-              final statsMap = <String, List<Map<String, int>>>{};
-
-              for (final doc in docs) {
-                final ts = doc['timestamp'];
-                if (ts is! Timestamp) continue;
-                final date = ts.toDate();
-                final key =
-                    '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-                statsMap.putIfAbsent(key, () => []).add({
-                  'heartRate': (doc['heartRate'] as num).toInt(),
-                  'spo2': (doc['spo2'] as num).toInt(),
-                });
-              }
-
-              final dailyStats = statsMap.entries.map((entry) {
-                final hrValues =
-                    entry.value.map((m) => m['heartRate']!).toList();
-                final spo2Values = entry.value.map((m) => m['spo2']!).toList();
-                final hrSum = hrValues.reduce((a, b) => a + b);
-                final spo2Sum = spo2Values.reduce((a, b) => a + b);
-
-                return DailyStats(
-                  date: entry.key,
-                  hrAvg: hrSum / hrValues.length,
-                  hrMin: hrValues.reduce((a, b) => a < b ? a : b),
-                  hrMax: hrValues.reduce((a, b) => a > b ? a : b),
-                  spo2Avg: spo2Sum / spo2Values.length,
-                  spo2Min: spo2Values.reduce((a, b) => a < b ? a : b),
-                  spo2Max: spo2Values.reduce((a, b) => a > b ? a : b),
-                );
-              }).toList()
-                ..sort((a, b) => a.date.compareTo(b.date));
-
-              final baseMs = (docs.first['timestamp'] as Timestamp)
-                  .millisecondsSinceEpoch
-                  .toDouble();
-              final hrSpots = docs
-                  .map((doc) {
-                    final ts = doc['timestamp'];
-                    if (ts is! Timestamp) return null;
-                    final x = ((ts.millisecondsSinceEpoch.toDouble() - baseMs) /
-                        3600000.0);
-                    final y = (doc['heartRate'] as num).toDouble();
-                    return FlSpot(x, y);
-                  })
-                  .whereType<FlSpot>()
-                  .toList();
-              final spo2Spots = docs
-                  .map((doc) {
-                    final ts = doc['timestamp'];
-                    if (ts is! Timestamp) return null;
-                    final x = ((ts.millisecondsSinceEpoch.toDouble() - baseMs) /
-                        3600000.0);
-                    final y = (doc['spo2'] as num).toDouble();
-                    return FlSpot(x, y);
-                  })
-                  .whereType<FlSpot>()
-                  .toList();
-
-              final maxX = [hrSpots, spo2Spots]
-                  .expand((list) => list)
-                  .map((s) => s.x)
-                  .fold<double>(0, (prev, e) => e > prev ? e : prev);
-              final minY = [hrSpots, spo2Spots]
-                  .expand((list) => list)
-                  .map((s) => s.y)
-                  .fold<double>(
-                      double.infinity, (prev, e) => e < prev ? e : prev);
-              final maxY = [hrSpots, spo2Spots]
-                  .expand((list) => list)
-                  .map((s) => s.y)
-                  .fold<double>(0, (prev, e) => e > prev ? e : prev);
-
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Card(
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: SizedBox(
-                        height: 240,
-                        child: LineChart(
-                          LineChartData(
-                            gridData: FlGridData(show: true),
-                            titlesData: FlTitlesData(
-                              bottomTitles: AxisTitles(
-                                sideTitles: SideTitles(
-                                  showTitles: true,
-                                  interval: (maxX / 5).clamp(0.1, maxX),
-                                  getTitlesWidget: (value, meta) {
-                                    final dateTime =
-                                        DateTime.fromMillisecondsSinceEpoch(
-                                            (baseMs + (value * 3600000.0))
-                                                .toInt());
-                                    final label = _selectedPeriod ==
-                                            HealthPeriod.last24h
-                                        ? '${dateTime.hour}:${dateTime.minute.toString().padLeft(2, '0')}'
-                                        : '${dateTime.month}/${dateTime.day}';
-                                    return Text(label,
-                                        style: const TextStyle(fontSize: 10));
-                                  },
+                            final docs = snapshot.data?.docs ?? [];
+                            return _buildChart(docs);
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _statCard('HR', '${widget.currentHeartRate} bpm',
+                                Colors.red),
+                            _statCard(
+                                'SpO2', '${widget.currentSpO2} %', Colors.blue),
+                            _statCard('Mean HR', widget.mean.toStringAsFixed(1),
+                                Colors.teal),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        const Text('History',
+                            style: TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        // History Section
+                        Expanded(
+                          child: ListView.builder(
+                            itemCount: _dailyStats.length,
+                            itemBuilder: (context, index) {
+                              final stat = _dailyStats[index];
+                              return Card(
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(10.0),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(stat.date,
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.bold)),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                          'HR avg ${stat.hrAvg.toStringAsFixed(1)}, min ${stat.hrMin}, max ${stat.hrMax}'),
+                                      Text(
+                                          'SpO2 avg ${stat.spo2Avg.toStringAsFixed(1)}, min ${stat.spo2Min}, max ${stat.spo2Max}'),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                              leftTitles: AxisTitles(
-                                sideTitles: SideTitles(
-                                    showTitles: true,
-                                    interval: ((maxY - minY) / 5)
-                                        .clamp(1, double.infinity)),
-                              ),
-                            ),
-                            minX: 0,
-                            maxX: maxX > 0 ? maxX : 1,
-                            minY: minY - 5,
-                            maxY: maxY + 5,
-                            lineBarsData: [
-                              LineChartBarData(
-                                spots: hrSpots,
-                                isCurved: true,
-                                color: Colors.red,
-                                barWidth: 2,
-                                dotData: FlDotData(show: false),
-                              ),
-                              LineChartBarData(
-                                spots: spo2Spots,
-                                isCurved: true,
-                                color: Colors.blue,
-                                barWidth: 2,
-                                dotData: FlDotData(show: false),
-                              ),
-                            ],
+                              );
+                            },
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _statCard(
-                          'HR', '${widget.currentHeartRate} bpm', Colors.red),
-                      _statCard('SpO2', '${widget.currentSpO2} %', Colors.blue),
-                      _statCard('Mean HR', widget.mean.toStringAsFixed(1),
-                          Colors.teal),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  const Text('History',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: dailyStats.length,
-                      itemBuilder: (context, index) {
-                        final stat = dailyStats[index];
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          child: Padding(
-                            padding: const EdgeInsets.all(10.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(stat.date,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 4),
-                                Text(
-                                    'HR avg ${stat.hrAvg.toStringAsFixed(1)}, min ${stat.hrMin}, max ${stat.hrMax}'),
-                                Text(
-                                    'SpO2 avg ${stat.spo2Avg.toStringAsFixed(1)}, min ${stat.spo2Min}, max ${stat.spo2Max}'),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
         ),
       ],
+    );
+  }
+
+  Widget _buildChart(List<QueryDocumentSnapshot> docs) {
+    final statsMap = <String, List<Map<String, int>>>{};
+
+    for (final doc in docs) {
+      final ts = doc['timestamp'];
+      if (ts is! Timestamp) continue;
+      final date = ts.toDate();
+      final key =
+          '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      statsMap.putIfAbsent(key, () => []).add({
+        'heartRate': (doc['heartRate'] as num).toInt(),
+        'spo2': (doc['spo2'] as num).toInt(),
+      });
+    }
+
+    final dailyStats = statsMap.entries.map((entry) {
+      final hrValues = entry.value.map((m) => m['heartRate']!).toList();
+      final spo2Values = entry.value.map((m) => m['spo2']!).toList();
+      final hrSum = hrValues.reduce((a, b) => a + b);
+      final spo2Sum = spo2Values.reduce((a, b) => a + b);
+
+      return DailyStats(
+        date: entry.key,
+        hrAvg: hrSum / hrValues.length,
+        hrMin: hrValues.reduce((a, b) => a < b ? a : b),
+        hrMax: hrValues.reduce((a, b) => a > b ? a : b),
+        spo2Avg: spo2Sum / spo2Values.length,
+        spo2Min: spo2Values.reduce((a, b) => a < b ? a : b),
+        spo2Max: spo2Values.reduce((a, b) => a > b ? a : b),
+      );
+    }).toList();
+
+    // Sort by date (latest first)
+    dailyStats.sort((a, b) => b.date.compareTo(a.date));
+
+    // Filter docs for graph based on selected period
+    final now = DateTime.now();
+    final startTime = now.subtract(_selectedPeriod.duration);
+    final filteredDocs = docs.where((doc) {
+      final ts = doc['timestamp'];
+      if (ts is! Timestamp) return false;
+      return ts.toDate().isAfter(startTime) ||
+          ts.toDate().isAtSameMomentAs(startTime);
+    }).toList();
+
+    // Generate spots based on selected period
+    List<FlSpot> hrSpots = [];
+    List<FlSpot> spo2Spots = [];
+
+    if (_selectedPeriod == HealthPeriod.last24h) {
+      // For 24 hours: aggregate data by hour
+      final hourlyMap = <int, List<Map<String, int>>>{};
+      final baseMs = (filteredDocs.isNotEmpty
+              ? filteredDocs.first['timestamp'] as Timestamp
+              : Timestamp.now())
+          .millisecondsSinceEpoch
+          .toDouble();
+
+      for (final doc in filteredDocs) {
+        final ts = doc['timestamp'];
+        if (ts is! Timestamp) continue;
+        final hour =
+            ((ts.millisecondsSinceEpoch.toDouble() - baseMs) / 3600000.0)
+                .floor();
+        hourlyMap.putIfAbsent(hour, () => []).add({
+          'heartRate': (doc['heartRate'] as num).toInt(),
+          'spo2': (doc['spo2'] as num).toInt(),
+        });
+      }
+
+      for (final entry in hourlyMap.entries) {
+        final hrValues = entry.value.map((m) => m['heartRate']!).toList();
+        final spo2Values = entry.value.map((m) => m['spo2']!).toList();
+        final hrAvg = hrValues.reduce((a, b) => a + b) / hrValues.length;
+        final spo2Avg = spo2Values.reduce((a, b) => a + b) / spo2Values.length;
+        hrSpots.add(FlSpot(entry.key.toDouble(), hrAvg));
+        spo2Spots.add(FlSpot(entry.key.toDouble(), spo2Avg));
+      }
+    } else {
+      // For 7+ days: use daily aggregates filtered by period
+      final periodFilteredStats = dailyStats.where((stat) {
+        final parts = stat.date.split('-');
+        final statDate = DateTime(
+            int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+        return statDate.isAfter(startTime) ||
+            statDate.isAtSameMomentAs(startTime);
+      }).toList();
+
+      for (int i = 0; i < periodFilteredStats.length; i++) {
+        hrSpots.add(FlSpot(i.toDouble(), periodFilteredStats[i].hrAvg));
+        spo2Spots.add(FlSpot(i.toDouble(), periodFilteredStats[i].spo2Avg));
+      }
+    }
+
+    final maxX = _selectedPeriod == HealthPeriod.last24h
+        ? ([hrSpots, spo2Spots]
+            .expand((list) => list)
+            .map((s) => s.x)
+            .fold<double>(0, (prev, e) => e > prev ? e : prev))
+        : ((hrSpots.length - 1).toDouble());
+    final minY = [hrSpots, spo2Spots]
+        .expand((list) => list)
+        .map((s) => s.y)
+        .fold<double>(double.infinity, (prev, e) => e < prev ? e : prev);
+    final maxY = [hrSpots, spo2Spots]
+        .expand((list) => list)
+        .map((s) => s.y)
+        .fold<double>(0, (prev, e) => e > prev ? e : prev);
+    final bottomInterval = _selectedPeriod == HealthPeriod.last24h
+        ? (maxX > 1.0 ? (maxX / 4.0).clamp(1.0, maxX).toDouble() : 1.0)
+        : (hrSpots.length > 1
+            ? (hrSpots.length / 4.0)
+                .clamp(1.0, hrSpots.length.toDouble())
+                .toDouble()
+            : 1.0);
+    final yRange = maxY - minY;
+    final leftInterval = yRange > 0
+        ? (yRange / 4.0).clamp(1.0, double.infinity).toDouble()
+        : 1.0;
+    final safeMinY = minY.isFinite ? minY - 5.0 : 0.0;
+    final safeMaxY = maxY.isFinite ? maxY + 5.0 : 1.0;
+
+    return Expanded(
+      child: Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: LineChart(
+            LineChartData(
+              gridData: FlGridData(show: true),
+              titlesData: FlTitlesData(
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 30,
+                    interval: bottomInterval,
+                    getTitlesWidget: (value, meta) {
+                      if (_selectedPeriod == HealthPeriod.last24h) {
+                        final baseMs = (filteredDocs.isNotEmpty
+                                ? filteredDocs.first['timestamp'] as Timestamp
+                                : Timestamp.now())
+                            .millisecondsSinceEpoch
+                            .toDouble();
+                        final dateTime = DateTime.fromMillisecondsSinceEpoch(
+                            (baseMs + (value * 3600000.0)).toInt());
+                        final label =
+                            '${dateTime.hour}:${dateTime.minute.toString().padLeft(2, '0')}';
+                        return Text(label,
+                            style: const TextStyle(
+                                fontSize: 9, color: Colors.grey));
+                      } else {
+                        final periodFilteredStats = dailyStats.where((stat) {
+                          final parts = stat.date.split('-');
+                          final statDate = DateTime(int.parse(parts[0]),
+                              int.parse(parts[1]), int.parse(parts[2]));
+                          return statDate.isAfter(startTime) ||
+                              statDate.isAtSameMomentAs(startTime);
+                        }).toList();
+
+                        final index = value.toInt();
+                        if (index >= 0 && index < periodFilteredStats.length) {
+                          final parts =
+                              periodFilteredStats[index].date.split('-');
+                          return Text('${parts[1]}/${parts[2]}',
+                              style: const TextStyle(
+                                  fontSize: 9, color: Colors.grey));
+                        }
+                        return const Text('');
+                      }
+                    },
+                  ),
+                ),
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 45,
+                      interval: leftInterval,
+                      getTitlesWidget: (value, meta) {
+                        return Text(
+                          value.toInt().toString(),
+                          style:
+                              const TextStyle(fontSize: 9, color: Colors.grey),
+                        );
+                      }),
+                ),
+              ),
+              minX: 0,
+              maxX: maxX > 0 ? maxX : 1,
+              minY: safeMinY,
+              maxY: safeMaxY,
+              lineBarsData: [
+                LineChartBarData(
+                  spots: hrSpots,
+                  isCurved: true,
+                  color: Colors.red,
+                  barWidth: 2,
+                  dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) {
+                        return FlDotCirclePainter(
+                          radius: 3,
+                          color: Colors.red,
+                          strokeWidth: 0,
+                        );
+                      }),
+                ),
+                LineChartBarData(
+                  spots: spo2Spots,
+                  isCurved: true,
+                  color: Colors.blue,
+                  barWidth: 2,
+                  dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) {
+                        return FlDotCirclePainter(
+                          radius: 3,
+                          color: Colors.blue,
+                          strokeWidth: 0,
+                        );
+                      }),
+                ),
+              ],
+              lineTouchData: LineTouchData(
+                enabled: true,
+                handleBuiltInTouches: true,
+                touchTooltipData: LineTouchTooltipData(
+                  tooltipPadding: const EdgeInsets.all(8),
+                  getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
+                    return touchedBarSpots.map((barSpot) {
+                      final isSeries0 = barSpot.barIndex == 0;
+                      final value = barSpot.y.toStringAsFixed(1);
+                      final label =
+                          isSeries0 ? 'HR: $value bpm' : 'SpO2: $value %';
+                      return LineTooltipItem(
+                        label,
+                        TextStyle(
+                          color: isSeries0 ? Colors.red : Colors.blue,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      );
+                    }).toList();
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 

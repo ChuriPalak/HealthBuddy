@@ -1,6 +1,8 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../services/notification_service.dart';
 import 'widgets/health_history_widget.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -41,11 +43,7 @@ class _CaregiverDashboardState extends State<CaregiverDashboard> {
                 Navigator.of(context).pop();
                 final lat = data['latitude'];
                 final lng = data['longitude'];
-                final url =
-                    'https://www.google.com/maps/search/?api=1&query=$lat,$lng';
-                if (await canLaunch(url)) {
-                  await launch(url);
-                }
+                await openMap(lat, lng);
               },
               child: const Text('View Location'),
             ),
@@ -77,14 +75,53 @@ class _CaregiverDashboardState extends State<CaregiverDashboard> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             Expanded(
-              child: HealthHistoryWidget(
-                currentHeartRate: 0,
-                currentSpO2: 0,
-                mean: 0,
-                stdDev: 0,
-                upper: 0,
-                lower: 0,
-                trend: 0,
+              child: StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('sensorData')
+                    .orderBy('timestamp', descending: false)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final docs = snapshot.data!.docs;
+                  if (docs.isEmpty) {
+                    return const Center(
+                        child: Text('No sensor data available.'));
+                  }
+
+                  final latestDoc = docs.last;
+                  final heartRate = (latestDoc['heartRate'] as num).toInt();
+                  final spo2 = (latestDoc['spo2'] as num).toInt();
+
+                  final List<int> hrValues = docs
+                      .map((doc) => (doc['heartRate'] as num).toInt())
+                      .toList();
+                  final mean =
+                      hrValues.reduce((a, b) => a + b) / hrValues.length;
+                  final variance = hrValues
+                          .map((e) => pow(e - mean, 2))
+                          .reduce((a, b) => a + b) /
+                      hrValues.length;
+                  final stdDev = sqrt(variance);
+                  final upper = mean + 2 * stdDev;
+                  final lower = mean - 2 * stdDev;
+                  final trend = hrValues.length >= 5
+                      ? (hrValues.last - hrValues[hrValues.length - 5])
+                          .toDouble()
+                      : 0.0;
+
+                  return HealthHistoryWidget(
+                    currentHeartRate: heartRate,
+                    currentSpO2: spo2,
+                    mean: mean,
+                    stdDev: stdDev,
+                    upper: upper,
+                    lower: lower,
+                    trend: trend,
+                  );
+                },
               ),
             ),
             const Divider(),
